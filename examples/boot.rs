@@ -50,5 +50,6 @@ async fn health(State(st): State<AppState>) -> HrResult<serde_json::Value> {
 
 #[tokio::main]
 async fn main() -> Result<(), HrError> {
+    tracing_subscriber::fmt::init();
     hr::boot::run_env([user_routes(), health_routes()]).await
 }

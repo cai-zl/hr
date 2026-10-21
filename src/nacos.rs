@@ -12,6 +12,7 @@ use nacos_sdk::api::naming::{NamingService, NamingServiceBuilder, ServiceInstanc
 use nacos_sdk::api::props::ClientProps;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
+use tracing::{debug, info, trace, warn};
 use std::sync::Arc;
 
 /// 就绪的 Nacos 客户端（配置 + 注册），克隆只是引用计数。
@@ -46,6 +47,7 @@ fn connect_auth(
     }
     let config = ConfigServiceBuilder::new(props.clone()).build()?;
     let naming = NamingServiceBuilder::new(props).build()?;
+    info!(server_addr, namespace, "Nacos connected");
     Ok(Nacos {
         config: Arc::new(config),
         naming: Arc::new(naming),
@@ -60,18 +62,23 @@ pub fn from_env() -> Result<Nacos, HrError> {
     let namespace = std::env::var("NACOS_NAMESPACE").unwrap_or_else(|_| "public".into());
     let username = std::env::var("NACOS_USERNAME").ok();
     let password = std::env::var("NACOS_PASSWORD").ok();
+    debug!(%server_addr, %namespace, auth = username.is_some(), "Nacos env resolved");
     connect_auth(&server_addr, &namespace, username, password)
 }
 
 impl Nacos {
     /// 读取配置文本；配置不存在返回 `Ok(None)`，其余错误向上传播。
     pub fn get_config(&self, data_id: &str, group: &str) -> Result<Option<String>, HrError> {
+        debug!(data_id, group, "get config");
         match self
             .config
             .get_config(data_id.to_string(), group.to_string())
         {
             Ok(resp) => Ok(Some(resp.content().clone())),
-            Err(NacosError::ConfigNotFound(_)) => Ok(None),
+            Err(NacosError::ConfigNotFound(_)) => {
+                warn!(data_id, group, "config not found");
+                Ok(None)
+            }
             Err(e) => Err(e.into()),
         }
     }
@@ -95,6 +102,7 @@ impl Nacos {
             Some(group.to_string()),
             instance(ip, port),
         )?;
+        info!(service, ip, port, group, "service registered");
         Ok(())
     }
 
@@ -111,12 +119,14 @@ impl Nacos {
             Some(group.to_string()),
             instance(ip, port),
         )?;
+        info!(service, ip, port, group, "service deregistered");
         Ok(())
     }
 }
 
 /// 解析 TOML 配置文本。
 pub fn parse_config<T: DeserializeOwned>(text: &str) -> Result<T, HrError> {
+    trace!(len = text.len(), "parsing TOML config");
     toml::from_str(text).map_err(HrError::from)
 }
 

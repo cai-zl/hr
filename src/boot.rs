@@ -11,6 +11,7 @@ use std::net::IpAddr;
 use std::path::Path;
 use toml::Table;
 
+use tracing::{debug, error, info};
 /// 运行时二进制名（去路径），app_name 与 NACOS_DATA_ID 的缺省值。
 pub fn default_app_name() -> String {
     std::env::args_os()
@@ -77,6 +78,7 @@ pub async fn run_env(routes: impl IntoIterator<Item = Router<AppState>>) -> Resu
     let nacos = crate::nacos::from_env()?;
     let data_id = std::env::var("NACOS_DATA_ID").unwrap_or_else(|_| default_app_name());
     let group = std::env::var("NACOS_GROUP").unwrap_or_else(|_| "DEFAULT_GROUP".into());
+    debug!(%data_id, %group, "loading config from nacos");
     let config: Config = nacos
         .load_config(&data_id, &group)?
         .ok_or_else(|| HrError::msg(format!("nacos config not found: {data_id}/{group}")))?;
@@ -89,9 +91,17 @@ pub async fn run(
     nacos: Nacos,
     routes: impl IntoIterator<Item = Router<AppState>>,
 ) -> Result<(), HrError> {
-    let pg = crate::pg::connect(&config.database_url).await?;
-    let redis = crate::redis::connect(&config.redis_url, config.redis_pool_size)?;
-    start(config, pg, redis, nacos, routes).await
+    info!(app = %config.app_name, "starting");
+    let result = async {
+        let pg = crate::pg::connect(&config.database_url).await?;
+        let redis = crate::redis::connect(&config.redis_url, config.redis_pool_size)?;
+        start(config, pg, redis, nacos, routes).await
+    }
+    .await;
+    if let Err(e) = &result {
+        error!(?e, "startup failed");
+    }
+    result
 }
 
 async fn start(
@@ -124,6 +134,7 @@ async fn start(
     let listener = tokio::net::TcpListener::bind((host.as_str(), bind_port))
         .await
         .map_err(|e| HrError::msg(format!("bind {host}:{bind_port} failed: {e}")))?;
+    info!(host, port = bind_port, "listening");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -131,7 +142,10 @@ async fn start(
         .map_err(|e| HrError::msg(e.to_string()))?;
 
     // 临时实例，注销失败也会被 Nacos 自动摘除
-    let _ = nacos.deregister(&service, &advertise, port, &group);
+    // 临时实例，注销失败也会被 Nacos 自动摘除
+    if let Err(e) = nacos.deregister(&service, &advertise, port, &group) {
+        error!(?e, "deregister failed (ephemeral instance will expire)");
+    }
     Ok(())
 }
 
@@ -155,4 +169,5 @@ async fn shutdown_signal() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
+    info!("shutdown signal received");
 }

@@ -25,7 +25,7 @@
 | `pg` | PostgreSQL 连接池 | sqlx 0.9 |
 | `redis` | Redis 连接池 | deadpool-redis 0.23 |
 | `nacos` | Nacos 配置中心 + 服务注册 | nacos-sdk 0.3 |
-| `boot` | 一键启动：配置 → 连接 → 注册 → 服务 → 停机反注册 | 前三者 + toml + tokio |
+| `boot` | 一键启动：配置 → 连接 → 注册 → 服务 → 停机反注册 | 前三者 + toml + tokio + tracing |
 
 只要响应信封？关掉默认 feature：`default-features = false`。
 ## 安装
@@ -415,6 +415,28 @@ curl localhost:3000/user/1   # 查 PostgreSQL
 > 本项目所有 HTTP handler 必须使用 `hr` 库返回响应：成功返回 `Ok(Hr::ok(data))`（或 `Hr::page(list, total, page, page_size)` 分页），失败返回 `Err(...)`，handler 签名用 `HrResult<T>` 或 `Hr<T>`。不要手写 JSON 响应结构，不要改 HTTP 状态码。
 
 > 服务接入：`main` 里用 `hr::boot::run_env([模块::routes(), ...]).await` 一行启动；每个业务模块暴露零参的 `routes() -> axum::Router<hr::AppState>`，handler 通过 `State(hr::AppState)` 拿 `config`/`pg`/`redis`/`nacos`。业务自定义配置写进配置中心 TOML，用 `state.config.extra::<T>()` 解析，不要另开配置文件。
+
+## 日志
+
+hr 通过 [`tracing`](https://docs.rs/tracing) 门面输出日志，业务侧初始化 subscriber 即可看到：
+
+```rust
+fn main() {
+    tracing_subscriber::fmt::init();   // 用 RUST_LOG 控制级别，如 RUST_LOG=info
+    // ...
+}
+```
+
+| 等级 | 内容 |
+|---|---|
+| `error` | 启动失败（连库 / 注册 / 监听）、停机注销失败 |
+| `warn` | Nacos 配置不存在（`load_config` 返回 `None` 前） |
+| `info` | 连接池就绪、Nacos 连接、服务注册 / 注销、开始监听、收到停机信号 |
+| `debug` | `NACOS_*` 环境变量解析结果、配置读取请求 |
+| `trace` | TOML 配置解析 |
+
+密码类字段（`database_url` / `redis_url` / `NACOS_PASSWORD`）永不写入日志。
+
 ## 测试
 
 ```bash
