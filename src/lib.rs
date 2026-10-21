@@ -29,6 +29,28 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
+
+#[cfg(feature = "pg")]
+pub mod pg;
+#[cfg(feature = "redis")]
+pub mod redis;
+#[cfg(feature = "nacos")]
+pub mod nacos;
+#[cfg(feature = "boot")]
+pub mod boot;
+
+#[cfg(feature = "boot")]
+pub use boot::AppState;
+
+/// 合并各业务模块的路由：`merge_all([user::routes(), order::routes()])`。
+pub fn merge_all<S>(routers: impl IntoIterator<Item = axum::Router<S>>) -> axum::Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    routers
+        .into_iter()
+        .fold(axum::Router::new(), |acc, router| acc.merge(router))
+}
 /// Success envelope: `{"code":0,"message":"ok","data":...}`.
 #[derive(Serialize)]
 pub struct Hr<T> {
@@ -66,6 +88,8 @@ impl<T: Serialize> IntoResponse for Hr<T> {
 }
 
 /// Error type for `?` in handlers; converts into an error envelope.
+/// Error type for `?` in handlers; converts into an error envelope.
+#[derive(Debug)]
 pub struct HrError {
     pub code: i32,
     pub message: String,
@@ -131,5 +155,47 @@ impl From<String> for HrError {
 impl From<&str> for HrError {
     fn from(message: &str) -> Self {
         Self::msg(message)
+    }
+}
+
+#[cfg(feature = "pg")]
+impl From<sqlx::Error> for HrError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::msg(e.to_string())
+    }
+}
+
+#[cfg(feature = "redis")]
+impl From<deadpool_redis::redis::RedisError> for HrError {
+    fn from(e: deadpool_redis::redis::RedisError) -> Self {
+        Self::msg(e.to_string())
+    }
+}
+
+#[cfg(feature = "redis")]
+impl From<deadpool_redis::PoolError> for HrError {
+    fn from(e: deadpool_redis::PoolError) -> Self {
+        Self::msg(e.to_string())
+    }
+}
+
+#[cfg(feature = "redis")]
+impl From<deadpool_redis::CreatePoolError> for HrError {
+    fn from(e: deadpool_redis::CreatePoolError) -> Self {
+        Self::msg(e.to_string())
+    }
+}
+
+#[cfg(feature = "nacos")]
+impl From<nacos_sdk::api::error::Error> for HrError {
+    fn from(e: nacos_sdk::api::error::Error) -> Self {
+        Self::msg(e.to_string())
+    }
+}
+
+#[cfg(feature = "boot")]
+impl From<toml::de::Error> for HrError {
+    fn from(e: toml::de::Error) -> Self {
+        Self::msg(e.to_string())
     }
 }

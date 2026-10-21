@@ -136,3 +136,18 @@ fn hr_error_helpers() {
     assert_eq!(HrError::msg("x").code, 500);
     assert_eq!(HrError::new(7, "y").code, 7);
 }
+
+#[tokio::test]
+async fn merge_all_combines_routers() {
+    let r1 = Router::new().route("/a", get(|| async { Hr::ok(alice()) }));
+    let r2 = Router::new().route("/b", get(|| async { Hr::<User>::err(1002, "b") }));
+    let app = hr::merge_all([r1, r2]);
+    let res = app
+        .oneshot(Request::get("/b").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 1002);
+}

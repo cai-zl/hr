@@ -1,6 +1,6 @@
 [package]
 name = "hr"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 description = "Unified HTTP response envelope (code/message/data) for axum services"
@@ -11,8 +11,27 @@ axum = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"], optional = true }
+deadpool-redis = { version = "0.23.1", optional = true }
+nacos-sdk = { version = "0.3.3", optional = true }
+toml = { version = "1.1.8", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+deadpool-redis = "0.23.1"
+nacos-sdk = "0.3.3"
+
+[features]
+default = ["pg", "redis", "nacos", "boot"]
+pg = ["dep:sqlx"]
+redis = ["dep:deadpool-redis"]
+nacos = ["dep:nacos-sdk", "dep:toml"]
+boot = ["dep:tokio", "dep:toml", "pg", "redis", "nacos"]
+
+[[example]]
+name = "boot"
+required-features = ["boot"]
