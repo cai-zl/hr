@@ -13,7 +13,10 @@ struct User {
 }
 
 fn alice() -> User {
-    User { id: 1, name: "alice".into() }
+    User {
+        id: 1,
+        name: "alice".into(),
+    }
 }
 
 async fn result_ok() -> HrResult<User> {
@@ -41,7 +44,10 @@ async fn page_route() -> Hr<HrPage<User>> {
 fn app() -> Router {
     Router::new()
         .route("/ok", get(|| async { Hr::ok(alice()) }))
-        .route("/ok-with", get(|| async { Hr::ok_with(alice(), "created") }))
+        .route(
+            "/ok-with",
+            get(|| async { Hr::ok_with(alice(), "created") }),
+        )
         .route("/err", get(|| async { Hr::<User>::err(1001, "no user") }))
         .route("/result-ok", get(result_ok))
         .route("/result-err", get(result_err))
@@ -89,7 +95,10 @@ async fn ok_with_custom_message() {
 #[tokio::test]
 async fn err_omits_data_field() {
     let (_, _, json) = hit("/err").await;
-    assert_eq!(json, serde_json::json!({"code": 1001, "message": "no user"}));
+    assert_eq!(
+        json,
+        serde_json::json!({"code": 1001, "message": "no user"})
+    );
     assert!(json.get("data").is_none());
 }
 
@@ -115,7 +124,10 @@ async fn anyhow_error_maps_to_500() {
 #[tokio::test]
 async fn status_code_maps_to_business_code() {
     let (_, _, json) = hit("/status").await;
-    assert_eq!(json, serde_json::json!({"code": 404, "message": "Not Found"}));
+    assert_eq!(
+        json,
+        serde_json::json!({"code": 404, "message": "Not Found"})
+    );
 }
 
 #[tokio::test]
@@ -126,7 +138,7 @@ async fn page_shape() {
         serde_json::json!({
             "code": 0,
             "message": "ok",
-            "data": {"list": [{"id": 1, "name": "alice"}], "total": 2, "page": 1, "page_size": 1}
+            "data": {"list": [{"id": 1, "name": "alice"}], "total": 2, "page": 1, "pageSize": 1}
         })
     );
 }

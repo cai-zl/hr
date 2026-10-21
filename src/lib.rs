@@ -24,20 +24,19 @@
 //! let app: Router = Router::new().route("/user", get(get_user));
 //! ```
 
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Serialize;
 
-
+#[cfg(feature = "boot")]
+pub mod boot;
+#[cfg(feature = "nacos")]
+pub mod nacos;
 #[cfg(feature = "pg")]
 pub mod pg;
 #[cfg(feature = "redis")]
 pub mod redis;
-#[cfg(feature = "nacos")]
-pub mod nacos;
-#[cfg(feature = "boot")]
-pub mod boot;
 
 #[cfg(feature = "boot")]
 pub use boot::AppState;
@@ -53,6 +52,7 @@ where
 }
 /// Success envelope: `{"code":0,"message":"ok","data":...}`.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Hr<T> {
     code: i32,
     message: String,
@@ -62,17 +62,29 @@ pub struct Hr<T> {
 
 impl<T: Serialize> Hr<T> {
     pub fn ok(data: T) -> Self {
-        Self { code: 0, message: "ok".into(), data: Some(data) }
+        Self {
+            code: 0,
+            message: "ok".into(),
+            data: Some(data),
+        }
     }
 
     /// Success with a custom message, e.g. "created".
     pub fn ok_with(data: T, message: impl Into<String>) -> Self {
-        Self { code: 0, message: message.into(), data: Some(data) }
+        Self {
+            code: 0,
+            message: message.into(),
+            data: Some(data),
+        }
     }
 
     /// Business failure; `data` is omitted from the body.
     pub fn err(code: i32, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), data: None }
+        Self {
+            code,
+            message: message.into(),
+            data: None,
+        }
     }
 
     /// Paginated success: `data = {"list":[...],"total":n,"page":n,"page_size":n}`.
@@ -97,7 +109,10 @@ pub struct HrError {
 
 impl HrError {
     pub fn new(code: i32, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 
     /// `code = 500`.
@@ -119,8 +134,9 @@ impl IntoResponse for HrError {
 /// `String`, `&str` — so `let u = repo.find(id)?;` just works.
 pub type HrResult<T> = Result<Hr<T>, HrError>;
 
-/// Paginated payload: `{"list":[...],"total":n,"page":n,"page_size":n}`.
+/// Paginated payload: `{"list":[...],"total":n,"page":n,"pageSize":n}`.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HrPage<T> {
     list: Vec<T>,
     total: u64,
@@ -130,13 +146,21 @@ pub struct HrPage<T> {
 
 impl<T> HrPage<T> {
     pub fn new(list: Vec<T>, total: u64, page: u64, page_size: u64) -> Self {
-        Self { list, total, page, page_size }
+        Self {
+            list,
+            total,
+            page,
+            page_size,
+        }
     }
 }
 
 impl From<StatusCode> for HrError {
     fn from(status: StatusCode) -> Self {
-        Self::new(status.as_u16() as i32, status.canonical_reason().unwrap_or("error"))
+        Self::new(
+            status.as_u16() as i32,
+            status.canonical_reason().unwrap_or("error"),
+        )
     }
 }
 

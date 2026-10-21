@@ -90,8 +90,11 @@ impl Nacos {
 
     /// 注册临时服务实例（进程退出或超时后 Nacos 自动摘除）。
     pub fn register(&self, service: &str, ip: &str, port: i32, group: &str) -> Result<(), HrError> {
-        self.naming
-            .register_instance(service.to_string(), Some(group.to_string()), instance(ip, port))?;
+        self.naming.register_instance(
+            service.to_string(),
+            Some(group.to_string()),
+            instance(ip, port),
+        )?;
         Ok(())
     }
 

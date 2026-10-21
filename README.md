@@ -16,6 +16,7 @@
 - 成败只看 body 里的 `code`：`0` = 成功，非 0 = 失败
 - `data` 只在成功时出现；失败响应没有 `data` 字段（不是 `null`，是整个省略）
 
+- 响应 JSON 键统一驼峰（camelCase）；当前唯一多词键是分页的 `pageSize`
 
 ## 0.2 模块（feature 默认全开）
 
@@ -128,7 +129,7 @@ async fn list_users() -> Hr<HrPage<User>> {
     "list": [{"id":1,"name":"alice"}, {"id":2,"name":"bob"}],
     "total": 57,
     "page": 1,
-    "page_size": 20
+    "pageSize": 20
   }
 }
 ```
@@ -226,7 +227,7 @@ impl<T> HrPage<T> {
 一般不直接用它，用 `Hr::page(...)` 即可。序列化形状固定为：
 
 ```json
-{"list":[...],"total":57,"page":1,"page_size":20}
+{"list":[...],"total":57,"page":1,"pageSize":20}
 ```
 
 ---
