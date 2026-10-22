@@ -504,4 +504,4 @@ fn main() {
 cargo test
 ```
 
-27 个集成测试：0.1 的 9 个信封测试（成功/失败精确形状、`data` 省略、`HrResult` 两条路径、anyhow / StatusCode / &str 转换、分页形状），加上 `merge_all` 合并路由、二进制名缺省、`NACOS_SERVER_ADDR` 缺失报错、`Config` 默认值与 `extra` 解析（含 `[pg]`/`[redis]` 配置段覆盖、旧平铺键落 `extra`）、缺必填字段报错、坏 TOML 报 500、sqlx / redis / nacos / toml / migrate 错误转换、`migrate!` 宏内嵌校验，加上框架错误信封（404/405 真实状态码 + `{"code":404,"message":"Not Found"}`）、`err(0)`→500、`Hr`/`HrPage` 反序列化往返、`group` 配置默认与覆盖、基础设施错误掩码为 `internal error`。`cargo check --no-default-features` 验证纯信封模式可编译。
+29 个集成测试：0.1 的 9 个信封测试（成功/失败精确形状、`data` 省略、`HrResult` 两条路径、anyhow / StatusCode / &str 转换、分页形状），加上 `merge_all` 合并路由、二进制名缺省、`NACOS_SERVER_ADDR` 缺失报错、`Config` 默认值与 `extra` 解析（含 `[pg]`/`[redis]` 配置段覆盖、旧平铺键落 `extra`）、缺必填字段报错、坏 TOML 报 500、sqlx / redis / nacos / toml / migrate 错误转换、`migrate!` 宏内嵌校验，加上框架错误信封（404/405 真实状态码 + `{"code":404,"message":"Not Found"}`）与 body 非空豁免透传（原状态码、原 content-type）、`err(0)`→500、`Hr`/`HrPage` 反序列化往返、`group` 配置默认与覆盖、基础设施错误掩码为 `internal error`。`cargo check --no-default-features` 验证纯信封模式可编译。

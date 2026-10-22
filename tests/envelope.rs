@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use axum::{Router, routing::get};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -197,6 +197,50 @@ async fn merge_all_wraps_405_with_real_status() {
         json,
         serde_json::json!({"code": 405, "message": "Method Not Allowed"})
     );
+}
+
+#[tokio::test]
+async fn merge_all_passes_through_non_empty_error_body() {
+    let app = hr::merge_all([Router::new().route(
+        "/a",
+        get(|| async { (StatusCode::BAD_REQUEST, "bad input") }),
+    )]);
+    let res = app
+        .oneshot(Request::get("/a").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        res.headers().get(header::CONTENT_TYPE).unwrap(),
+        "text/plain; charset=utf-8"
+    );
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"bad input");
+}
+
+#[tokio::test]
+async fn merge_all_preserves_content_type_on_passthrough() {
+    let app = hr::merge_all([Router::new().route(
+        "/a",
+        get(|| async {
+            (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "text/html")],
+                "<h1>err</h1>",
+            )
+        }),
+    )]);
+    let res = app
+        .oneshot(Request::get("/a").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        res.headers().get(header::CONTENT_TYPE).unwrap(),
+        "text/html"
+    );
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"<h1>err</h1>");
 }
 
 #[test]

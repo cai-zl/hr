@@ -8,7 +8,8 @@
 //! ```
 //!
 //! HTTP status is always 200 for business responses; success/failure is read from `code` (0 = ok).
-//! Framework errors (404/405/…, ≥400) keep their real status code but get an envelope body.
+//! Framework errors (404/405/…) keep their real status code; empty bodies are
+//! wrapped in an envelope, non-empty bodies pass through untouched.
 //!
 //! ```
 //! use axum::{Router, routing::get};
@@ -55,8 +56,8 @@ where
         .layer(axum::middleware::from_fn(framework_error_envelope))
 }
 
-/// axum 框架错误包装：≥400 的响应保留原状态码，body 换成信封。
-/// message 优先取原 body 文本（如 400 的 Invalid URL segment），空体用规范原因短语。
+/// axum 框架错误包装：空 body 的 ≥400 响应保留真实状态码并包装成信封；
+/// body 非空的响应（业务自写错误页）连同原状态码、原 content-type 原样透传。
 async fn framework_error_envelope(
     req: axum::extract::Request,
     next: axum::middleware::Next,
@@ -66,15 +67,27 @@ async fn framework_error_envelope(
     if !status.is_client_error() && !status.is_server_error() {
         return res;
     }
-    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
-        .await
-        .map(|b| b.to_vec())
-        .unwrap_or_default();
-    let message = match std::str::from_utf8(&bytes) {
-        Ok(s) if !s.is_empty() => s.to_owned(),
-        _ => status.canonical_reason().unwrap_or("error").to_owned(),
-    };
-    (status, Hr::<String>::err(status.as_u16() as i32, message)).into_response()
+    let (parts, body) = res.into_parts();
+    let bytes = axum::body::to_bytes(body, 64 * 1024).await;
+    match bytes {
+        // 空 body = axum 框架错误（404/405 等）：真状态码 + 信封
+        Ok(b) if b.is_empty() => {
+            let message = parts
+                .status
+                .canonical_reason()
+                .unwrap_or("error")
+                .to_owned();
+            (
+                parts.status,
+                Hr::<String>::err(parts.status.as_u16() as i32, message),
+            )
+                .into_response()
+        }
+        // 读不出内容：原样透传（头/状态码保留），不伪造信封
+        Err(_) => Response::from_parts(parts, axum::body::Body::empty()),
+        // body 非空 = 业务自写的错误页：原状态码 + 原头（含 content-type）原样透传
+        Ok(b) => Response::from_parts(parts, axum::body::Body::from(b)),
+    }
 }
 /// Success envelope: `{"code":0,"message":"ok","data":...}`.
 #[derive(Serialize, Deserialize)]
