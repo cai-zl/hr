@@ -7,7 +7,8 @@
 //! {"code":404,"message":"Not Found"}
 //! ```
 //!
-//! HTTP status is always 200; success/failure is read from `code` (0 = ok).
+//! HTTP status is always 200 for business responses; success/failure is read from `code` (0 = ok).
+//! Framework errors (404/405/…, ≥400) keep their real status code but get an envelope body.
 //!
 //! ```
 //! use axum::{Router, routing::get};
@@ -43,6 +44,7 @@ pub mod redis;
 pub use boot::AppState;
 
 /// 合并各业务模块的路由：`merge_all([user::routes(), order::routes()])`。
+/// 框架错误（≥400，如 404/405/400）保留真实状态码，body 统一包装成信封。
 pub fn merge_all<S>(routers: impl IntoIterator<Item = axum::Router<S>>) -> axum::Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -50,7 +52,29 @@ where
     routers
         .into_iter()
         .fold(axum::Router::new(), |acc, router| acc.merge(router))
-        .fallback(|| async { Hr::<&'static str>::err(404, "not found") })
+        .layer(axum::middleware::from_fn(framework_error_envelope))
+}
+
+/// axum 框架错误包装：≥400 的响应保留原状态码，body 换成信封。
+/// message 优先取原 body 文本（如 400 的 Invalid URL segment），空体用规范原因短语。
+async fn framework_error_envelope(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let res = next.run(req).await;
+    let status = res.status();
+    if !status.is_client_error() && !status.is_server_error() {
+        return res;
+    }
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .map(|b| b.to_vec())
+        .unwrap_or_default();
+    let message = match std::str::from_utf8(&bytes) {
+        Ok(s) if !s.is_empty() => s.to_owned(),
+        _ => status.canonical_reason().unwrap_or("error").to_owned(),
+    };
+    (status, Hr::<String>::err(status.as_u16() as i32, message)).into_response()
 }
 /// Success envelope: `{"code":0,"message":"ok","data":...}`.
 #[derive(Serialize, Deserialize)]

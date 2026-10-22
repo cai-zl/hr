@@ -41,7 +41,7 @@ hr = { git = "ssh://git@github.com/cai-zl/hr.git" }
 | `HrResult<T>` | handler 标准返回类型（别名） |
 | `HrPage<T>` / `HrPage::new` | 分页数据结构 |
 | `From<...> for HrError` | `StatusCode` / `anyhow::Error` / `String` / `&str` 自动转换（基础设施错误统一 `internal error`，原文进日志） |
-| `hr::merge_all([...])` | 合并各业务模块路由，附 404 信封 fallback |
+| `hr::merge_all([...])` | 合并各业务模块路由；框架错误（404/405/400 等 ≥400）保留真实状态码，body 统一包装成信封 |
 | `pg::PgConfig` / `redis::RedisConfig` / `sqlx::migrate!` | `[pg]`/`[redis]` 配置段（连接由 boot 启动时执行）/ 编译期迁移 |
 | `nacos::Nacos` | 配置中心读取 + 服务注册/注销 |
 | `boot::serve` / `boot::serve_with` + `with_migrator` / `with_hook` | 一键启动整套服务，链式挂迁移与启动钩子（见下文） |
@@ -92,7 +92,7 @@ async fn create_user() -> Hr<User> {
 
 ### `Hr::err(code, message)` — 业务失败
 
-`data` 不出现在响应里。HTTP 状态仍是 200。`code = 0` 表示成功，`err(0, ..)` 会被当作 500 处理。
+`data` 不出现在响应里。HTTP 状态仍是 200。`code = 0` 表示成功，`err(0, ..)` 会被当作 500 处理。例外：框架错误（404 无路由、405 方法不对、400 路径参数错等 ≥400 响应）由 `merge_all` 保留真实 HTTP 状态码，body 仍是信封（code = 状态码，message 取 axum 原文或规范原因短语）。
 
 handler 直接返回 `Hr<T>`（不是 `HrResult`）时用它：
 
@@ -504,4 +504,4 @@ fn main() {
 cargo test
 ```
 
-26 个集成测试：0.1 的 9 个信封测试（成功/失败精确形状、`data` 省略、`HrResult` 两条路径、anyhow / StatusCode / &str 转换、分页形状），加上 `merge_all` 合并路由、二进制名缺省、`NACOS_SERVER_ADDR` 缺失报错、`Config` 默认值与 `extra` 解析（含 `[pg]`/`[redis]` 配置段覆盖、旧平铺键落 `extra`）、缺必填字段报错、坏 TOML 报 500、sqlx / redis / nacos / toml / migrate 错误转换、`migrate!` 宏内嵌校验，加上 404 fallback 信封、`err(0)`→500、`Hr`/`HrPage` 反序列化往返、`group` 配置默认与覆盖、基础设施错误掩码为 `internal error`。`cargo check --no-default-features` 验证纯信封模式可编译。
+27 个集成测试：0.1 的 9 个信封测试（成功/失败精确形状、`data` 省略、`HrResult` 两条路径、anyhow / StatusCode / &str 转换、分页形状），加上 `merge_all` 合并路由、二进制名缺省、`NACOS_SERVER_ADDR` 缺失报错、`Config` 默认值与 `extra` 解析（含 `[pg]`/`[redis]` 配置段覆盖、旧平铺键落 `extra`）、缺必填字段报错、坏 TOML 报 500、sqlx / redis / nacos / toml / migrate 错误转换、`migrate!` 宏内嵌校验，加上框架错误信封（404/405 真实状态码 + `{"code":404,"message":"Not Found"}`）、`err(0)`→500、`Hr`/`HrPage` 反序列化往返、`group` 配置默认与覆盖、基础设施错误掩码为 `internal error`。`cargo check --no-default-features` 验证纯信封模式可编译。

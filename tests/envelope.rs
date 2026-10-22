@@ -174,12 +174,28 @@ async fn merge_all_fallback_returns_envelope() {
         .oneshot(Request::get("/nope").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
     let body = res.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(
         json,
-        serde_json::json!({"code": 404, "message": "not found"})
+        serde_json::json!({"code": 404, "message": "Not Found"})
+    );
+}
+
+#[tokio::test]
+async fn merge_all_wraps_405_with_real_status() {
+    let app = hr::merge_all([Router::new().route("/a", get(|| async { Hr::ok(alice()) }))]);
+    let res = app
+        .oneshot(Request::post("/a").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"code": 405, "message": "Method Not Allowed"})
     );
 }
 
