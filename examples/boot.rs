@@ -9,8 +9,8 @@
 //! cargo run --example boot
 //! ```
 //!
-//! 业务模块的固定写法：零参函数返回 `Router<AppState>`，main 一行启动。
-
+//! 业务模块的固定写法：零参函数返回 `Router<AppState>`；启动钩子是收 `AppState` 的
+//! 普通异步函数，`serve(..).with_migrator(..).with_hook(..).await` 一行启动。
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::routing::get;
@@ -49,8 +49,17 @@ async fn health(State(st): State<AppState>) -> HrResult<serde_json::Value> {
     Ok(Hr::ok(json!({ "app": st.config.app_name, "redis": pong })))
 }
 
+/// 启动钩子：普通异步函数，收 `AppState`，返回 Err 则不启动、不注册。
+async fn on_start(st: AppState) -> Result<(), HrError> {
+    tracing::info!(app = %st.config.app_name, "startup hook: seed / warm-up here");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), HrError> {
     tracing_subscriber::fmt::init();
-    hr::boot::run_env(Some(sqlx::migrate!("./migrations")), [user_routes(), health_routes()]).await
+    hr::boot::serve([user_routes(), health_routes()])
+        .with_migrator(sqlx::migrate!("./migrations"))
+        .with_hook(on_start)
+        .await
 }

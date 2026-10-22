@@ -23,7 +23,10 @@ pub struct PgConfig {
 
 impl Default for PgConfig {
     fn default() -> Self {
-        Self { max_connections: 10, acquire_timeout_secs: 5 }
+        Self {
+            max_connections: 10,
+            acquire_timeout_secs: 5,
+        }
     }
 }
 
@@ -40,7 +43,10 @@ pub async fn connect_with(url: &str, cfg: &PgConfig) -> Result<sqlx::PgPool, sql
         .connect(url)
         .await;
     if pool.is_ok() {
-        info!(max_connections = cfg.max_connections, "PostgreSQL pool connected");
+        info!(
+            max_connections = cfg.max_connections,
+            "PostgreSQL pool connected"
+        );
     }
     pool
 }

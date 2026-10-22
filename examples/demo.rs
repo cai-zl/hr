@@ -14,11 +14,23 @@ async fn get_user(Path(id): Path<u32>) -> HrResult<User> {
     if id == 0 {
         return Err(HrError::new(404, "user not found"));
     }
-    Ok(Hr::ok(User { id, name: "alice".into() }))
+    Ok(Hr::ok(User {
+        id,
+        name: "alice".into(),
+    }))
 }
 
 async fn list_users() -> Hr<HrPage<User>> {
-    let users = vec![User { id: 1, name: "alice".into() }, User { id: 2, name: "bob".into() }];
+    let users = vec![
+        User {
+            id: 1,
+            name: "alice".into(),
+        },
+        User {
+            id: 2,
+            name: "bob".into(),
+        },
+    ];
     Hr::page(users, 2, 1, 20)
 }
 

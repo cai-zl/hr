@@ -21,17 +21,32 @@ pub struct RedisConfig {
 
 impl Default for RedisConfig {
     fn default() -> Self {
-        Self { pool_size: 10, wait_timeout_secs: None }
+        Self {
+            pool_size: 10,
+            wait_timeout_secs: None,
+        }
     }
 }
 
 /// 连接 Redis，只指定池大小（等待超时用库默认）。
-pub fn connect(url: &str, max_size: usize) -> Result<deadpool_redis::Pool, deadpool_redis::CreatePoolError> {
-    connect_with(url, &RedisConfig { pool_size: max_size, ..Default::default() })
+pub fn connect(
+    url: &str,
+    max_size: usize,
+) -> Result<deadpool_redis::Pool, deadpool_redis::CreatePoolError> {
+    connect_with(
+        url,
+        &RedisConfig {
+            pool_size: max_size,
+            ..Default::default()
+        },
+    )
 }
 
 /// 连接 Redis，使用给定配置。
-pub fn connect_with(url: &str, cfg: &RedisConfig) -> Result<deadpool_redis::Pool, deadpool_redis::CreatePoolError> {
+pub fn connect_with(
+    url: &str,
+    cfg: &RedisConfig,
+) -> Result<deadpool_redis::Pool, deadpool_redis::CreatePoolError> {
     let mut pool_cfg = deadpool_redis::PoolConfig::new(cfg.pool_size);
     if let Some(secs) = cfg.wait_timeout_secs {
         pool_cfg.timeouts.wait = Some(Duration::from_secs(secs));

@@ -48,7 +48,7 @@ hr = { git = "ssh://git@github.com/cai-zl/hr.git" }
 | `hr::merge_all([...])` | 合并各业务模块路由 |
 | `pg::connect_with` / `redis::connect_with` / `sqlx::migrate!` | 数据库 / Redis 连接（`[pg]`/`[redis]` 配置段）/ 编译期迁移 |
 | `nacos::Nacos` | 配置中心读取 + 服务注册/注销 |
-| `boot::run_env` / `boot::run` | 一键启动整套服务（见下文） |
+| `boot::serve` / `boot::serve_with` + `with_migrator` / `with_hook` | 一键启动整套服务，链式挂迁移与启动钩子（见下文） |
 | `AppState`（boot） | 全家桶状态：config / pg / redis / nacos |
 ---
 
@@ -260,15 +260,15 @@ let name: Option<(String,)> = sqlx::query_as::<_, (String,)>("select name from t
 
 ### 数据库迁移（编译期内嵌，部署零目录）
 
-业务仓库建 `migrations/` 目录（sqlx 命名 `<序号>_<描述>.sql`，如 `0001_create_user.sql`），`main` 里把 `sqlx::migrate!("./migrations")` 传给 `run_env`/`run`，启动时自动执行（`_sqlx_migrations` 记账、幂等）：
+业务仓库建 `migrations/` 目录（sqlx 命名 `<序号>_<描述>.sql`，如 `0001_create_user.sql`），`main` 里用 `with_migrator(sqlx::migrate!("./migrations"))` 挂上，启动时自动执行（`_sqlx_migrations` 记账、幂等）：
 
 ```rust
 use hr::pg::sqlx;   // 宏用，无需在 Cargo.toml 加 sqlx 依赖
 
-hr::boot::run_env(Some(sqlx::migrate!("./migrations")), [user::routes()]).await
+hr::boot::serve([user::routes()]).with_migrator(sqlx::migrate!("./migrations")).await
 ```
 
-不用迁移就传 `None`。约定：序号递增；已发布到生产的迁移文件不改内容（sqlx 按 checksum 校验）；只支持上行迁移。
+不调用 `with_migrator` 就不跑迁移。约定：序号递增；已发布到生产的迁移文件不改内容（sqlx 按 checksum 校验）；只支持上行迁移。
 
 ## `redis` 模块 — Redis 连接池
 
@@ -320,7 +320,7 @@ impl Nacos {
 | `NACOS_SERVER_ADDR` | ✅ | — | 如 `127.0.0.1:8848`；缺失时 `from_env` 直接报错 |
 | `NACOS_NAMESPACE` | | `public` | |
 | `NACOS_USERNAME` / `NACOS_PASSWORD` | | — | 两者都设置才启用鉴权 |
-| `NACOS_DATA_ID` | | 运行时二进制名 | `boot::run_env` 读配置用；二进制改名部署时显式覆盖 |
+| `NACOS_DATA_ID` | | 运行时二进制名 | `boot::serve` 读配置用；二进制改名部署时显式覆盖 |
 | `NACOS_GROUP` | | `DEFAULT_GROUP` | 读配置与服务注册共用 |
 
 ### 用法
@@ -363,21 +363,20 @@ pub struct AppState {                  // hr 根导出，Clone
 pub fn default_app_name() -> String;
 pub fn detect_ip() -> Option<IpAddr>;
 
-pub async fn run_env(
-    migrator: Option<sqlx::migrate::Migrator>,
-    routes: impl IntoIterator<Item = Router<AppState>>,
-) -> Result<(), HrError>;
-pub async fn run(
-    migrator: Option<sqlx::migrate::Migrator>,
-    config: Config,
-    nacos: Nacos,
-    routes: impl IntoIterator<Item = Router<AppState>>,
-) -> Result<(), HrError>;
-```
+pub fn serve(routes: impl IntoIterator<Item = Router<AppState>>) -> Boot;
+pub fn serve_with(config: Config, nacos: Nacos, routes: impl IntoIterator<Item = Router<AppState>>) -> Boot;
 
-`run_env` 做完全套：`NACOS_*` 环境变量 → Nacos 配置中心读 `Config`（data_id 缺省为二进制名，group 取 `NACOS_GROUP`）→ 迁移（传了 `migrator` 时）→ 连 PostgreSQL / Redis → 合并路由 → 向 Nacos 注册服务 → 监听服务 → ctrl_c / SIGTERM 优雅停机并反注册。
+impl Boot {                                        // Boot: IntoFuture，链式配好后 .await 即启动
+    pub fn with_migrator(self, migrator: sqlx::migrate::Migrator) -> Self;
+    pub fn with_hook<F, Fut>(self, hook: F) -> Self
+    where
+        F: FnOnce(AppState) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), HrError>> + Send + 'static;
+}
 
-想自己掌控参数（配置来源、Nacos 连接方式）时用 `run(migrator, config, nacos, routes)`：流程相同，跳过环境变量与配置中心读取。
+`serve` 做完全套：`NACOS_*` 环境变量 → Nacos 配置中心读 `Config`（data_id 缺省为二进制名，group 取 `NACOS_GROUP`）→ 连 PostgreSQL / Redis → 迁移（`with_migrator` 挂了才跑）→ 逐个执行启动钩子（`with_hook`，见下文）→ 合并路由 → 向 Nacos 注册服务 → 监听 → ctrl_c / SIGTERM 优雅停机并反注册。
+
+想自己掌控参数（配置来源、Nacos 连接方式）时用 `serve_with(config, nacos, routes)`：流程相同，跳过环境变量与配置中心读取。
 
 ### 业务模块的固定写法
 
@@ -397,10 +396,37 @@ async fn get_user(State(st): State<hr::AppState>, Path(id): Path<i64>) -> hr::Hr
 // src/main.rs
 #[tokio::main]
 async fn main() -> Result<(), hr::HrError> {
-    // 迁移不用就传 None
-    hr::boot::run_env(Some(sqlx::migrate!("./migrations")), [user::routes(), order::routes()]).await
+    hr::boot::serve([user::routes(), order::routes()])
+        .with_migrator(sqlx::migrate!("./migrations"))
+        .await
 }
 ```
+
+### 启动钩子
+
+一次性前置步骤（播种、预热）与常驻后台任务，都写成**普通异步函数**，用 `with_hook` 逐个链式追加（不同函数的类型各不相同，无法装进同一个数组）：
+
+```rust
+async fn warm_up(st: hr::AppState) -> Result<(), hr::HrError> {
+    // 前置步骤：用 st.pg / st.redis 播种、预热；返回 Err 则整个启动失败
+    Ok(())
+}
+
+async fn start_flusher(st: hr::AppState) -> Result<(), hr::HrError> {
+    tokio::spawn(flush_loop(st.redis));   // 常驻任务：裸 tokio::spawn，随进程退出
+    Ok(())
+}
+
+hr::boot::serve([user::routes()])
+    .with_migrator(sqlx::migrate!("./migrations"))
+    .with_hook(warm_up)          // 按调用顺序执行
+    .with_hook(start_flusher)
+    .await
+```
+
+- 钩子在连接与迁移之后、Nacos 注册与监听之前执行；任一返回 `Err` 即整体启动失败（不注册、不监听）。
+- 钩子收到 `AppState` 的 Clone（字段全是引用计数句柄，克隆近零成本）；钩子之间不共享修改。
+- 钩子里 `tokio::spawn` 的任务与 serve 并行，进程退出即结束。
 
 ### 配置中心里的 TOML 示例
 
@@ -457,7 +483,7 @@ curl localhost:3000/user/1   # 查 PostgreSQL
 
 > 本项目所有 HTTP handler 必须使用 `hr` 库返回响应：成功返回 `Ok(Hr::ok(data))`（或 `Hr::page(list, total, page, page_size)` 分页），失败返回 `Err(...)`，handler 签名用 `HrResult<T>` 或 `Hr<T>`。不要手写 JSON 响应结构，不要改 HTTP 状态码。
 
-> 服务接入：`main` 里用 `hr::boot::run_env(Some(sqlx::migrate!("./migrations")), [模块::routes(), ...]).await` 启动（不用迁移传 `None`）；每个业务模块暴露零参的 `routes() -> axum::Router<hr::AppState>`，handler 通过 `State(hr::AppState)` 拿 `config`/`pg`/`redis`/`nacos`。连接参数写配置中心 `[pg]`/`[redis]` 段（整段可省略 = 全默认）；业务自定义配置用 `state.config.extra::<T>()` 解析，不要另开配置文件。
+> 服务接入：`main` 里用 `hr::boot::serve([模块::routes(), ...]).with_migrator(sqlx::migrate!("./migrations")).await` 启动（不用迁移就不调 `with_migrator`）；启动钩子是收 `hr::AppState` 的普通异步函数，`with_hook` 逐个追加，返回 Err 则不启动；每个业务模块暴露零参的 `routes() -> axum::Router<hr::AppState>`，handler 通过 `State(hr::AppState)` 拿 `config`/`pg`/`redis`/`nacos`。连接参数写配置中心 `[pg]`/`[redis]` 段（整段可省略 = 全默认）；业务自定义配置用 `state.config.extra::<T>()` 解析，不要另开配置文件。
 
 ## 日志
 
@@ -486,4 +512,4 @@ fn main() {
 cargo test
 ```
 
-21 个集成测试：0.1 的 9 个信封测试（成功/失败精确形状、`data` 省略、`HrResult` 两条路径、anyhow / StatusCode / &str 转换、分页形状），加上 `merge_all` 合并路由、二进制名缺省、`NACOS_SERVER_ADDR` 缺失报错、`Config` 默认值与 `extra` 解析（含 `[pg]`/`[redis]` 配置段覆盖、旧平铺键落 `extra`）、缺必填字段报错、坏 TOML 报 500、sqlx / redis / nacos / toml / migrate 错误转换、`migrate!` 宏内嵌校验。`cargo check --no-default-features` 验证纯信封模式可编译。
+22 个集成测试：0.1 的 9 个信封测试（成功/失败精确形状、`data` 省略、`HrResult` 两条路径、anyhow / StatusCode / &str 转换、分页形状），加上 `merge_all` 合并路由、二进制名缺省、`NACOS_SERVER_ADDR` 缺失报错、`Config` 默认值与 `extra` 解析（含 `[pg]`/`[redis]` 配置段覆盖、旧平铺键落 `extra`）、缺必填字段报错、坏 TOML 报 500、sqlx / redis / nacos / toml / migrate 错误转换、`migrate!` 宏内嵌校验。`cargo check --no-default-features` 验证纯信封模式可编译。

@@ -1,7 +1,7 @@
 //! 0.2 模块测试：默认值、env 解析、配置解析、extra 段、错误转换。
 use hr::boot::{self, Config};
-use hr::pg::sqlx;
 use hr::nacos;
+use hr::pg::sqlx;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -97,9 +97,10 @@ fn config_pg_redis_sections_default_and_override() {
 
 #[test]
 fn legacy_flat_redis_pool_size_falls_into_extra() {
-    let c: Config =
-        nacos::parse_config("port = 8080\ndatabase_url = \"p\"\nredis_url = \"r\"\nredis_pool_size = 32")
-            .unwrap();
+    let c: Config = nacos::parse_config(
+        "port = 8080\ndatabase_url = \"p\"\nredis_url = \"r\"\nredis_pool_size = 32",
+    )
+    .unwrap();
     assert!(c.extra.get("redis_pool_size").is_some());
 }
 
@@ -111,6 +112,7 @@ fn migrate_macro_embeds_files() {
 
 #[test]
 fn migrate_error_maps_to_500() {
-    let e: hr::HrError = sqlx::migrate::MigrateError::Source(Box::new(sqlx::Error::RowNotFound)).into();
+    let e: hr::HrError =
+        sqlx::migrate::MigrateError::Source(Box::new(sqlx::Error::RowNotFound)).into();
     assert_eq!(e.code, 500);
 }
