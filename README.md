@@ -43,8 +43,8 @@ hr = { git = "ssh://git@github.com/cai-zl/hr.git" }
 | `HrError` / `HrError::new` / `HrError::msg` | 错误类型，配 `?` 使用 |
 | `HrResult<T>` | handler 标准返回类型（别名） |
 | `HrPage<T>` / `HrPage::new` | 分页数据结构 |
-| `From<...> for HrError` | `StatusCode` / `anyhow::Error` / `String` / `&str` 自动转换 |
-| `hr::merge_all([...])` | 合并各业务模块路由 |
+| `From<...> for HrError` | `StatusCode` / `anyhow::Error` / `String` / `&str` 自动转换（基础设施错误统一 `internal error`，原文进日志） |
+| `hr::merge_all([...])` | 合并各业务模块路由，附 404 信封 fallback |
 | `pg::connect_with` / `redis::connect_with` / `sqlx::migrate!` | 数据库 / Redis 连接（`[pg]`/`[redis]` 配置段）/ 编译期迁移 |
 | `nacos::Nacos` | 配置中心读取 + 服务注册/注销 |
 | `boot::serve` / `boot::serve_with` + `with_migrator` / `with_hook` | 一键启动整套服务，链式挂迁移与启动钩子（见下文） |
@@ -53,7 +53,7 @@ hr = { git = "ssh://git@github.com/cai-zl/hr.git" }
 
 ## `Hr<T>` — 响应信封
 
-结构体字段是私有的，只能通过构造器创建，保证所有响应结构一致。
+结构体字段是私有的，只能通过构造器创建，保证所有响应结构一致。`Hr<T>` / `HrPage<T>` 同时实现了 `Serialize` 和 `Deserialize`，服务间互调（BFF 调 hr 服务）可直接把响应解析回来。
 
 ```rust
 pub struct Hr<T> { /* code: i32, message: String, data: Option<T> — 均私有 */ }
@@ -95,7 +95,7 @@ async fn create_user() -> Hr<User> {
 
 ### `Hr::err(code, message)` — 业务失败
 
-`data` 不出现在响应里。HTTP 状态仍是 200。
+`data` 不出现在响应里。HTTP 状态仍是 200。`code = 0` 表示成功，`err(0, ..)` 会被当作 500 处理。
 
 handler 直接返回 `Hr<T>`（不是 `HrResult`）时用它：
 
@@ -196,13 +196,13 @@ return Err(HrError::msg("数据库连接失败"));
 | 来源 | 转换结果 |
 |---|---|
 | `&str` / `String` | `{"code":500,"message":"<字符串>"}` |
-| `anyhow::Error` | `{"code":500,"message":"<err.to_string()>"}` |
+| `anyhow::Error` | `{"code":500,"message":"internal error"}`（原文 `warn!` 进日志） |
 | `axum::http::StatusCode` | `{"code":<状态码数字>,"message":"<标准原因短语>"}` |
 
-| `sqlx::Error` / `sqlx::migrate::MigrateError`（pg feature） | `{"code":500,...}` |
-| `deadpool_redis::PoolError` / `CreatePoolError` / `redis::RedisError`（redis feature） | `{"code":500,...}` |
-| `nacos_sdk::api::error::Error`（nacos feature） | `{"code":500,...}` |
-| `toml::de::Error`（boot feature） | `{"code":500,...}` |
+| `sqlx::Error` / `sqlx::migrate::MigrateError`（pg feature） | `{"code":500,"message":"internal error"}`（原文进日志） |
+| `deadpool_redis::PoolError` / `CreatePoolError` / `redis::RedisError`（redis feature） | 同上 |
+| `nacos_sdk::api::error::Error`（nacos feature） | 同上 |
+| `toml::de::Error`（nacos feature） | 同上 |
 ```rust
 async fn demo() -> HrResult<User> {
     let user = repo.find(id)?;               // anyhow::Error → {"code":500,...}
@@ -320,7 +320,7 @@ impl Nacos {
 | `NACOS_NAMESPACE` | | `public` | |
 | `NACOS_USERNAME` / `NACOS_PASSWORD` | | — | 两者都设置才启用鉴权 |
 | `NACOS_DATA_ID` | | 运行时二进制名 | `boot::serve` 读配置用；二进制改名部署时显式覆盖 |
-| `NACOS_GROUP` | | `DEFAULT_GROUP` | 读配置与服务注册共用 |
+| `NACOS_GROUP` | | `DEFAULT_GROUP` | 读配置用；服务注册分组走 `Config.group` |
 
 ### 用法
 
@@ -339,6 +339,7 @@ nacos.deregister("my-app", "192.168.1.10", 3000, "DEFAULT_GROUP")?;
 pub struct Config {
     pub app_name: String,              // 默认：运行时二进制名
     pub host: String,                  // 默认 "0.0.0.0"
+    pub group: String,                 // Nacos 注册分组，默认 "DEFAULT_GROUP"
     pub port: u16,                     // 必填
     pub database_url: String,          // 必填
     pub redis_url: String,             // 必填
@@ -373,10 +374,12 @@ impl Boot {                                        // Boot: IntoFuture，链式�
         Fut: Future<Output = Result<(), HrError>> + Send + 'static;
 }
 
-`serve` 做完全套：`NACOS_*` 环境变量 → Nacos 配置中心读 `Config`（data_id 缺省为二进制名，group 取 `NACOS_GROUP`）→ 连 PostgreSQL / Redis → 迁移（`with_migrator` 挂了才跑）→ 逐个执行启动钩子（`with_hook`，见下文）→ 合并路由 → 向 Nacos 注册服务 → 监听 → ctrl_c / SIGTERM 优雅停机并反注册。
+`serve` 做完全套：`NACOS_*` 环境变量 → Nacos 配置中心读 `Config`（data_id 缺省为二进制名，group 取 `NACOS_GROUP`）→ 连 PostgreSQL / Redis → 迁移（`with_migrator` 挂了才跑）→ 逐个执行启动钩子（`with_hook`，见下文）→ 合并路由 → 监听 → 注册 Nacos（**先监听后注册**：绑定失败不会把坏实例挂上网关）→ ctrl_c / SIGTERM 优雅停机并反注册。服务注册分组取 `Config` 的 `group` 键（默认 `DEFAULT_GROUP`）。
 
 想自己掌控参数（配置来源、Nacos 连接方式）时用 `serve_with(config, nacos, routes)`：流程相同，跳过环境变量与配置中心读取。
 
+
+注意：handler 内 panic 会让该请求连接直接断开（拿不到信封）。需要兜底时在 Router 上加 `tower-http` 的 `CatchPanicLayer`（业务仓库自行引入，本库不强制这个依赖）。
 ### 业务模块的固定写法
 
 每个业务模块暴露一个零参路由函数，`main` 一行启动：
@@ -433,6 +436,7 @@ hr::boot::serve([user::routes()])
 port = 3000
 database_url = "postgres://user:pass@127.0.0.1:5432/mydb"
 redis_url = "redis://127.0.0.1:6379"
+group = "DEFAULT_GROUP"         # 服务注册分组，可省略
 advertise_ip = "192.168.1.10"   # 可省略，省略则自动探测
 
 [pg]                    # 整段可省略 = 全默认
@@ -482,7 +486,7 @@ curl localhost:3000/user/1   # 查 PostgreSQL
 
 > 本项目所有 HTTP handler 必须使用 `hr` 库返回响应：成功返回 `Ok(Hr::ok(data))`（或 `Hr::page(list, total, page, page_size)` 分页），失败返回 `Err(...)`，handler 签名用 `HrResult<T>` 或 `Hr<T>`。不要手写 JSON 响应结构，不要改 HTTP 状态码。
 
-> 服务接入：`main` 里用 `hr::boot::serve([模块::routes(), ...]).with_migrator(sqlx::migrate!("./migrations")).await` 启动（不用迁移就不调 `with_migrator`）；启动钩子是收 `hr::AppState` 的普通异步函数，`with_hook` 逐个追加，返回 Err 则不启动；每个业务模块暴露零参的 `routes() -> axum::Router<hr::AppState>`，handler 通过 `State(hr::AppState)` 拿 `config`/`pg`/`redis`/`nacos`。连接参数写配置中心 `[pg]`/`[redis]` 段（整段可省略 = 全默认）；业务自定义配置用 `state.config.extra::<T>()` 解析，不要另开配置文件。
+> 服务接入：`main` 里用 `hr::boot::serve([模块::routes(), ...]).with_migrator(sqlx::migrate!("./migrations")).await` 启动（不用迁移就不调 `with_migrator`）；启动钩子是收 `hr::AppState` 的普通异步函数，`with_hook` 逐个追加，返回 Err 则不启动；基础设施错误（数据库/Redis/Nacos/TOML）经 `?` 转换后响应体固定为 `{"code":500,"message":"internal error"}`（原文在服务日志），不要把内部错误细节拼进响应；每个业务模块暴露零参的 `routes() -> axum::Router<hr::AppState>`，handler 通过 `State(hr::AppState)` 拿 `config`/`pg`/`redis`/`nacos`。连接参数写配置中心 `[pg]`/`[redis]` 段（整段可省略 = 全默认）；业务自定义配置用 `state.config.extra::<T>()` 解析，不要另开配置文件。
 
 ## 日志
 
@@ -511,4 +515,4 @@ fn main() {
 cargo test
 ```
 
-22 个集成测试：0.1 的 9 个信封测试（成功/失败精确形状、`data` 省略、`HrResult` 两条路径、anyhow / StatusCode / &str 转换、分页形状），加上 `merge_all` 合并路由、二进制名缺省、`NACOS_SERVER_ADDR` 缺失报错、`Config` 默认值与 `extra` 解析（含 `[pg]`/`[redis]` 配置段覆盖、旧平铺键落 `extra`）、缺必填字段报错、坏 TOML 报 500、sqlx / redis / nacos / toml / migrate 错误转换、`migrate!` 宏内嵌校验。`cargo check --no-default-features` 验证纯信封模式可编译。
+26 个集成测试：0.1 的 9 个信封测试（成功/失败精确形状、`data` 省略、`HrResult` 两条路径、anyhow / StatusCode / &str 转换、分页形状），加上 `merge_all` 合并路由、二进制名缺省、`NACOS_SERVER_ADDR` 缺失报错、`Config` 默认值与 `extra` 解析（含 `[pg]`/`[redis]` 配置段覆盖、旧平铺键落 `extra`）、缺必填字段报错、坏 TOML 报 500、sqlx / redis / nacos / toml / migrate 错误转换、`migrate!` 宏内嵌校验，加上 404 fallback 信封、`err(0)`→500、`Hr`/`HrPage` 反序列化往返、`group` 配置默认与覆盖、基础设施错误掩码为 `internal error`。`cargo check --no-default-features` 验证纯信封模式可编译。

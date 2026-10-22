@@ -118,7 +118,10 @@ async fn hr_result_err_via_from_str() {
 #[tokio::test]
 async fn anyhow_error_maps_to_500() {
     let (_, _, json) = hit("/anyhow").await;
-    assert_eq!(json, serde_json::json!({"code": 500, "message": "db down"}));
+    assert_eq!(
+        json,
+        serde_json::json!({"code": 500, "message": "internal error"})
+    );
 }
 
 #[tokio::test]
@@ -162,4 +165,41 @@ async fn merge_all_combines_routers() {
     let body = res.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], 1002);
+}
+
+#[tokio::test]
+async fn merge_all_fallback_returns_envelope() {
+    let app = hr::merge_all([Router::new()]);
+    let res = app
+        .oneshot(Request::get("/nope").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"code": 404, "message": "not found"})
+    );
+}
+
+#[test]
+fn err_zero_code_becomes_500() {
+    let json = serde_json::to_value(Hr::<()>::err(0, "x")).unwrap();
+    assert_eq!(json, serde_json::json!({"code": 500, "message": "x"}));
+}
+
+#[test]
+fn hr_and_hr_page_deserialize_roundtrip() {
+    let ok = serde_json::json!({"code":0,"message":"ok","data":{"id":1}});
+    let hr: hr::Hr<serde_json::Value> = serde_json::from_value(ok.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&hr).unwrap(), ok);
+
+    let err = serde_json::json!({"code":500,"message":"boom"});
+    let hr: hr::Hr<serde_json::Value> = serde_json::from_value(err.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&hr).unwrap(), err);
+
+    let page = serde_json::json!({"list":[],"total":5,"page":1,"pageSize":20});
+    let p: hr::HrPage<serde_json::Value> = serde_json::from_value(page.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&p).unwrap(), page);
 }

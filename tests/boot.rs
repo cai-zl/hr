@@ -60,18 +60,34 @@ fn parse_config_bad_toml_is_500() {
 }
 
 #[test]
+fn config_group_default_and_override() {
+    let c: Config =
+        nacos::parse_config("port = 8080\ndatabase_url = \"p\"\nredis_url = \"r\"").unwrap();
+    assert_eq!(c.group, "DEFAULT_GROUP");
+    let c: Config = nacos::parse_config(
+        "port = 8080\ndatabase_url = \"p\"\nredis_url = \"r\"\ngroup = \"MY_GROUP\"",
+    )
+    .unwrap();
+    assert_eq!(c.group, "MY_GROUP");
+}
+
+#[test]
 fn error_conversions_map_to_500() {
     let e: hr::HrError = sqlx::Error::RowNotFound.into();
     assert_eq!(e.code, 500);
+    assert_eq!(e.message, "internal error");
     let e: hr::HrError = nacos_sdk::api::error::Error::NoAvailableServer.into();
     assert_eq!(e.code, 500);
+    assert_eq!(e.message, "internal error");
     let io = std::io::Error::other("x");
     let e: hr::HrError = deadpool_redis::redis::RedisError::from(io).into();
     assert_eq!(e.code, 500);
+    assert_eq!(e.message, "internal error");
     let io = std::io::Error::other("x");
     let e: hr::HrError =
         deadpool_redis::PoolError::Backend(deadpool_redis::redis::RedisError::from(io)).into();
     assert_eq!(e.code, 500);
+    assert_eq!(e.message, "internal error");
 }
 
 #[test]

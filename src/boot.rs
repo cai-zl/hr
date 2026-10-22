@@ -29,6 +29,10 @@ fn default_host() -> String {
     "0.0.0.0".into()
 }
 
+fn default_group() -> String {
+    "DEFAULT_GROUP".into()
+}
+
 /// 服务配置：来自 Nacos 配置中心（TOML），未声明的键全部落入 `extra`。
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -36,6 +40,9 @@ pub struct Config {
     pub app_name: String,
     #[serde(default = "default_host")]
     pub host: String,
+    /// Nacos 服务注册分组，默认 DEFAULT_GROUP。
+    #[serde(default = "default_group")]
+    pub group: String,
     pub port: u16,
     pub database_url: String,
     pub redis_url: String,
@@ -198,14 +205,13 @@ async fn run_app(
         Some(ip) => ip,
         None => detect_ip()
             .map(|a| a.to_string())
-            .ok_or_else(|| HrError::msg("无法探测本机 IP，请在配置中显式设置 advertise_ip"))?,
+            .ok_or_else(|| HrError::msg("cannot detect local ip; set advertise_ip in config"))?,
     };
     let service = config.app_name.clone();
     let port = config.port as i32;
     let host = config.host.clone();
     let bind_port = config.port;
-    let group = std::env::var("NACOS_GROUP").unwrap_or_else(|_| "DEFAULT_GROUP".into());
-
+    let group = config.group.clone();
     let state = AppState {
         config,
         pg,
@@ -218,13 +224,11 @@ async fn run_app(
     }
 
     let app = merge_all(routes).with_state(state);
-    nacos.register(&service, &advertise, port, &group)?;
-
     let listener = tokio::net::TcpListener::bind((host.as_str(), bind_port))
         .await
         .map_err(|e| HrError::msg(format!("bind {host}:{bind_port} failed: {e}")))?;
     info!(host, port = bind_port, "listening");
-
+    nacos.register(&service, &advertise, port, &group)?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await

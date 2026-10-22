@@ -27,7 +27,8 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[cfg(feature = "boot")]
 pub mod boot;
@@ -49,14 +50,15 @@ where
     routers
         .into_iter()
         .fold(axum::Router::new(), |acc, router| acc.merge(router))
+        .fallback(|| async { Hr::<&'static str>::err(404, "not found") })
 }
 /// Success envelope: `{"code":0,"message":"ok","data":...}`.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Hr<T> {
     code: i32,
     message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     data: Option<T>,
 }
 
@@ -79,7 +81,10 @@ impl<T: Serialize> Hr<T> {
     }
 
     /// Business failure; `data` is omitted from the body.
+    ///
+    /// `code = 0` means success in this protocol; `err(0, ..)` is treated as 500.
     pub fn err(code: i32, message: impl Into<String>) -> Self {
+        let code = if code == 0 { 500 } else { code };
         Self {
             code,
             message: message.into(),
@@ -99,7 +104,6 @@ impl<T: Serialize> IntoResponse for Hr<T> {
     }
 }
 
-/// Error type for `?` in handlers; converts into an error envelope.
 /// Error type for `?` in handlers; converts into an error envelope.
 #[derive(Debug)]
 pub struct HrError {
@@ -135,7 +139,7 @@ impl IntoResponse for HrError {
 pub type HrResult<T> = Result<Hr<T>, HrError>;
 
 /// Paginated payload: `{"list":[...],"total":n,"page":n,"pageSize":n}`.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HrPage<T> {
     list: Vec<T>,
@@ -166,7 +170,8 @@ impl From<StatusCode> for HrError {
 
 impl From<anyhow::Error> for HrError {
     fn from(e: anyhow::Error) -> Self {
-        Self::msg(e.to_string())
+        warn!(error = ?e, "infrastructure error mapped to 500");
+        Self::msg("internal error")
     }
 }
 
@@ -185,47 +190,54 @@ impl From<&str> for HrError {
 #[cfg(feature = "pg")]
 impl From<sqlx::Error> for HrError {
     fn from(e: sqlx::Error) -> Self {
-        Self::msg(e.to_string())
+        warn!(error = ?e, "infrastructure error mapped to 500");
+        Self::msg("internal error")
     }
 }
 #[cfg(feature = "pg")]
 impl From<sqlx::migrate::MigrateError> for HrError {
     fn from(e: sqlx::migrate::MigrateError) -> Self {
-        Self::msg(e.to_string())
+        warn!(error = ?e, "infrastructure error mapped to 500");
+        Self::msg("internal error")
     }
 }
 
 #[cfg(feature = "redis")]
 impl From<deadpool_redis::redis::RedisError> for HrError {
     fn from(e: deadpool_redis::redis::RedisError) -> Self {
-        Self::msg(e.to_string())
+        warn!(error = ?e, "infrastructure error mapped to 500");
+        Self::msg("internal error")
     }
 }
 
 #[cfg(feature = "redis")]
 impl From<deadpool_redis::PoolError> for HrError {
     fn from(e: deadpool_redis::PoolError) -> Self {
-        Self::msg(e.to_string())
+        warn!(error = ?e, "infrastructure error mapped to 500");
+        Self::msg("internal error")
     }
 }
 
 #[cfg(feature = "redis")]
 impl From<deadpool_redis::CreatePoolError> for HrError {
     fn from(e: deadpool_redis::CreatePoolError) -> Self {
-        Self::msg(e.to_string())
+        warn!(error = ?e, "infrastructure error mapped to 500");
+        Self::msg("internal error")
     }
 }
 
 #[cfg(feature = "nacos")]
 impl From<nacos_sdk::api::error::Error> for HrError {
     fn from(e: nacos_sdk::api::error::Error) -> Self {
-        Self::msg(e.to_string())
+        warn!(error = ?e, "infrastructure error mapped to 500");
+        Self::msg("internal error")
     }
 }
 
-#[cfg(feature = "boot")]
+#[cfg(feature = "nacos")]
 impl From<toml::de::Error> for HrError {
     fn from(e: toml::de::Error) -> Self {
-        Self::msg(e.to_string())
+        warn!(error = ?e, "infrastructure error mapped to 500");
+        Self::msg("internal error")
     }
 }
