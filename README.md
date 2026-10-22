@@ -44,7 +44,6 @@ hr = { git = "ssh://git@github.com/cai-zl/hr.git" }
 | `HrResult<T>` | handler 标准返回类型（别名） |
 | `HrPage<T>` / `HrPage::new` | 分页数据结构 |
 | `From<...> for HrError` | `StatusCode` / `anyhow::Error` / `String` / `&str` 自动转换 |
-
 | `hr::merge_all([...])` | 合并各业务模块路由 |
 | `pg::connect_with` / `redis::connect_with` / `sqlx::migrate!` | 数据库 / Redis 连接（`[pg]`/`[redis]` 配置段）/ 编译期迁移 |
 | `nacos::Nacos` | 配置中心读取 + 服务注册/注销 |
