@@ -12,8 +12,8 @@ use nacos_sdk::api::naming::{NamingService, NamingServiceBuilder, ServiceInstanc
 use nacos_sdk::api::props::ClientProps;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-use tracing::{debug, info, trace, warn};
 use std::sync::Arc;
+use tracing::{debug, info, trace, warn};
 
 /// 就绪的 Nacos 客户端（配置 + 注册），克隆只是引用计数。
 #[derive(Clone)]

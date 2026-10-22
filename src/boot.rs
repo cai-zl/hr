@@ -27,9 +27,6 @@ fn default_host() -> String {
     "0.0.0.0".into()
 }
 
-fn default_pool_size() -> usize {
-    10
-}
 
 /// 服务配置：来自 Nacos 配置中心（TOML），未声明的键全部落入 `extra`。
 #[derive(Debug, Clone, Deserialize)]
@@ -41,8 +38,12 @@ pub struct Config {
     pub port: u16,
     pub database_url: String,
     pub redis_url: String,
-    #[serde(default = "default_pool_size")]
-    pub redis_pool_size: usize,
+    /// pg 连接配置（`[pg]` 段，全默认可省略）。
+    #[serde(default)]
+    pub pg: crate::pg::PgConfig,
+    /// redis 连接配置（`[redis]` 段，全默认可省略）。
+    #[serde(default)]
+    pub redis: crate::redis::RedisConfig,
     /// 对外注册 IP；缺省时自动探测，探测失败则启动报错。
     pub advertise_ip: Option<String>,
     /// 业务自定义配置段（未在上方声明的所有键）。
@@ -73,8 +74,11 @@ pub fn detect_ip() -> Option<IpAddr> {
     s.local_addr().ok().map(|a| a.ip())
 }
 
-/// 全环境启动：NACOS_* 环境变量 → Nacos 配置中心 → 连 pg/redis → 注册 → 服务 → 停机反注册。
-pub async fn run_env(routes: impl IntoIterator<Item = Router<AppState>>) -> Result<(), HrError> {
+/// 全环境启动：NACOS_* 环境变量 → Nacos 配置中心 → 迁移 → 连 pg/redis → 注册 → 服务 → 停机反注册。
+pub async fn run_env(
+    migrator: Option<sqlx::migrate::Migrator>,
+    routes: impl IntoIterator<Item = Router<AppState>>,
+) -> Result<(), HrError> {
     let nacos = crate::nacos::from_env()?;
     let data_id = std::env::var("NACOS_DATA_ID").unwrap_or_else(|_| default_app_name());
     let group = std::env::var("NACOS_GROUP").unwrap_or_else(|_| "DEFAULT_GROUP".into());
@@ -82,19 +86,24 @@ pub async fn run_env(routes: impl IntoIterator<Item = Router<AppState>>) -> Resu
     let config: Config = nacos
         .load_config(&data_id, &group)?
         .ok_or_else(|| HrError::msg(format!("nacos config not found: {data_id}/{group}")))?;
-    run(config, nacos, routes).await
+    run(migrator, config, nacos, routes).await
 }
 
 /// 显式全参启动：调用方自带 config 与已连好的 nacos。
 pub async fn run(
+    migrator: Option<sqlx::migrate::Migrator>,
     config: Config,
     nacos: Nacos,
     routes: impl IntoIterator<Item = Router<AppState>>,
 ) -> Result<(), HrError> {
     info!(app = %config.app_name, "starting");
     let result = async {
-        let pg = crate::pg::connect(&config.database_url).await?;
-        let redis = crate::redis::connect(&config.redis_url, config.redis_pool_size)?;
+        let pg = crate::pg::connect_with(&config.database_url, &config.pg).await?;
+        if let Some(migrator) = migrator {
+            migrator.run(&pg).await?;
+            info!("migrations applied");
+        }
+        let redis = crate::redis::connect_with(&config.redis_url, &config.redis)?;
         start(config, pg, redis, nacos, routes).await
     }
     .await;
@@ -141,7 +150,6 @@ async fn start(
         .await
         .map_err(|e| HrError::msg(e.to_string()))?;
 
-    // 临时实例，注销失败也会被 Nacos 自动摘除
     // 临时实例，注销失败也会被 Nacos 自动摘除
     if let Err(e) = nacos.deregister(&service, &advertise, port, &group) {
         error!(?e, "deregister failed (ephemeral instance will expire)");

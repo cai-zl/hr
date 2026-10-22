@@ -46,7 +46,7 @@ hr = { git = "ssh://git@github.com/cai-zl/hr.git" }
 | `From<...> for HrError` | `StatusCode` / `anyhow::Error` / `String` / `&str` 自动转换 |
 
 | `hr::merge_all([...])` | 合并各业务模块路由 |
-| `pg::connect` / `redis::connect` | 数据库 / Redis 连接池 |
+| `pg::connect_with` / `redis::connect_with` / `sqlx::migrate!` | 数据库 / Redis 连接（`[pg]`/`[redis]` 配置段）/ 编译期迁移 |
 | `nacos::Nacos` | 配置中心读取 + 服务注册/注销 |
 | `boot::run_env` / `boot::run` | 一键启动整套服务（见下文） |
 | `AppState`（boot） | 全家桶状态：config / pg / redis / nacos |
@@ -200,7 +200,7 @@ return Err(HrError::msg("数据库连接失败"));
 | `anyhow::Error` | `{"code":500,"message":"<err.to_string()>"}` |
 | `axum::http::StatusCode` | `{"code":<状态码数字>,"message":"<标准原因短语>"}` |
 
-| `sqlx::Error`（pg feature） | `{"code":500,...}` |
+| `sqlx::Error` / `sqlx::migrate::MigrateError`（pg feature） | `{"code":500,...}` |
 | `deadpool_redis::PoolError` / `CreatePoolError` / `redis::RedisError`（redis feature） | `{"code":500,...}` |
 | `nacos_sdk::api::error::Error`（nacos feature） | `{"code":500,...}` |
 | `toml::de::Error`（boot feature） | `{"code":500,...}` |
@@ -235,10 +235,16 @@ impl<T> HrPage<T> {
 ## `pg` 模块 — PostgreSQL 连接池
 
 ```rust
-pub use sqlx;   // 重新导出，业务代码无需直接依赖 sqlx
+pub use sqlx;             // 重新导出，业务代码无需直接依赖 sqlx
+pub use sqlx::migrate;    // 迁移：hr::pg::migrate::Migrator + sqlx::migrate! 宏
 
-pub async fn connect(url: &str) -> Result<sqlx::PgPool, sqlx::Error>;
-// max_connections = 10，acquire 超时 5s
+pub struct PgConfig {     // TOML [pg] 段，全默认可整段省略
+    pub max_connections: u32,     // 默认 10
+    pub acquire_timeout_secs: u64, // 默认 5
+}
+
+pub async fn connect(url: &str) -> Result<sqlx::PgPool, sqlx::Error>;              // 默认配置
+pub async fn connect_with(url: &str, cfg: &PgConfig) -> Result<sqlx::PgPool, sqlx::Error>;
 ```
 
 ```rust
@@ -251,12 +257,32 @@ let name: Option<(String,)> = sqlx::query_as::<_, (String,)>("select name from t
     .map_err(hr::HrError::from)?;   // sqlx::Error → {"code":500,...}
 ```
 
+
+### 数据库迁移（编译期内嵌，部署零目录）
+
+业务仓库建 `migrations/` 目录（sqlx 命名 `<序号>_<描述>.sql`，如 `0001_create_user.sql`），`main` 里把 `sqlx::migrate!("./migrations")` 传给 `run_env`/`run`，启动时自动执行（`_sqlx_migrations` 记账、幂等）：
+
+```rust
+use hr::pg::sqlx;   // 宏用，无需在 Cargo.toml 加 sqlx 依赖
+
+hr::boot::run_env(Some(sqlx::migrate!("./migrations")), [user::routes()]).await
+```
+
+不用迁移就传 `None`。约定：序号递增；已发布到生产的迁移文件不改内容（sqlx 按 checksum 校验）；只支持上行迁移。
+
 ## `redis` 模块 — Redis 连接池
 
 ```rust
 pub use deadpool_redis;   // 重新导出
 
-pub fn connect(url: &str, max_size: usize)
+pub struct RedisConfig {      // TOML [redis] 段，全默认可整段省略
+    pub pool_size: usize,             // 默认 10
+    pub wait_timeout_secs: Option<u64>, // 默认 None（库默认，不设等待超时）
+}
+
+pub fn connect(url: &str, max_size: usize)   // 简写：只设池大小
+    -> Result<deadpool_redis::Pool, deadpool_redis::CreatePoolError>;
+pub fn connect_with(url: &str, cfg: &RedisConfig)
     -> Result<deadpool_redis::Pool, deadpool_redis::CreatePoolError>;
 ```
 
@@ -317,7 +343,8 @@ pub struct Config {
     pub port: u16,                     // 必填
     pub database_url: String,          // 必填
     pub redis_url: String,             // 必填
-    pub redis_pool_size: usize,        // 默认 10
+    pub pg: hr::pg::PgConfig,          // [pg] 段，省略 = 全默认
+    pub redis: hr::redis::RedisConfig, // [redis] 段，省略 = 全默认（0.3 的平铺 redis_pool_size 改到这里）
     pub advertise_ip: Option<String>,  // 缺省自动探测；探测失败启动报错
     pub extra: toml::Table,            // #[serde(flatten)]，未声明的键全落这里
 }
@@ -336,14 +363,21 @@ pub struct AppState {                  // hr 根导出，Clone
 pub fn default_app_name() -> String;
 pub fn detect_ip() -> Option<IpAddr>;
 
-pub async fn run_env(routes: impl IntoIterator<Item = Router<AppState>>) -> Result<(), HrError>;
-pub async fn run(config: Config, nacos: Nacos, routes: impl IntoIterator<Item = Router<AppState>>)
-    -> Result<(), HrError>;
+pub async fn run_env(
+    migrator: Option<sqlx::migrate::Migrator>,
+    routes: impl IntoIterator<Item = Router<AppState>>,
+) -> Result<(), HrError>;
+pub async fn run(
+    migrator: Option<sqlx::migrate::Migrator>,
+    config: Config,
+    nacos: Nacos,
+    routes: impl IntoIterator<Item = Router<AppState>>,
+) -> Result<(), HrError>;
 ```
 
-`run_env` 做完全套：`NACOS_*` 环境变量 → Nacos 配置中心读 `Config`（data_id 缺省为二进制名，group 取 `NACOS_GROUP`）→ 连 PostgreSQL / Redis → 合并路由 → 向 Nacos 注册服务 → 监听服务 → ctrl_c / SIGTERM 优雅停机并反注册。
+`run_env` 做完全套：`NACOS_*` 环境变量 → Nacos 配置中心读 `Config`（data_id 缺省为二进制名，group 取 `NACOS_GROUP`）→ 迁移（传了 `migrator` 时）→ 连 PostgreSQL / Redis → 合并路由 → 向 Nacos 注册服务 → 监听服务 → ctrl_c / SIGTERM 优雅停机并反注册。
 
-想自己掌控参数（配置来源、Nacos 连接方式）时用 `run(config, nacos, routes)`：流程相同，跳过环境变量与配置中心读取。
+想自己掌控参数（配置来源、Nacos 连接方式）时用 `run(migrator, config, nacos, routes)`：流程相同，跳过环境变量与配置中心读取。
 
 ### 业务模块的固定写法
 
@@ -363,7 +397,8 @@ async fn get_user(State(st): State<hr::AppState>, Path(id): Path<i64>) -> hr::Hr
 // src/main.rs
 #[tokio::main]
 async fn main() -> Result<(), hr::HrError> {
-    hr::boot::run_env([user::routes(), order::routes()]).await
+    // 迁移不用就传 None
+    hr::boot::run_env(Some(sqlx::migrate!("./migrations")), [user::routes(), order::routes()]).await
 }
 ```
 
@@ -374,6 +409,14 @@ port = 3000
 database_url = "postgres://user:pass@127.0.0.1:5432/mydb"
 redis_url = "redis://127.0.0.1:6379"
 advertise_ip = "192.168.1.10"   # 可省略，省略则自动探测
+
+[pg]                    # 整段可省略 = 全默认
+max_connections = 20
+acquire_timeout_secs = 10
+
+[redis]                 # 整段可省略 = 全默认
+pool_size = 32
+# wait_timeout_secs = 8
 
 # 业务自定义键/段全部落进 config.extra，随取随解析：
 [biz]
@@ -414,7 +457,7 @@ curl localhost:3000/user/1   # 查 PostgreSQL
 
 > 本项目所有 HTTP handler 必须使用 `hr` 库返回响应：成功返回 `Ok(Hr::ok(data))`（或 `Hr::page(list, total, page, page_size)` 分页），失败返回 `Err(...)`，handler 签名用 `HrResult<T>` 或 `Hr<T>`。不要手写 JSON 响应结构，不要改 HTTP 状态码。
 
-> 服务接入：`main` 里用 `hr::boot::run_env([模块::routes(), ...]).await` 一行启动；每个业务模块暴露零参的 `routes() -> axum::Router<hr::AppState>`，handler 通过 `State(hr::AppState)` 拿 `config`/`pg`/`redis`/`nacos`。业务自定义配置写进配置中心 TOML，用 `state.config.extra::<T>()` 解析，不要另开配置文件。
+> 服务接入：`main` 里用 `hr::boot::run_env(Some(sqlx::migrate!("./migrations")), [模块::routes(), ...]).await` 启动（不用迁移传 `None`）；每个业务模块暴露零参的 `routes() -> axum::Router<hr::AppState>`，handler 通过 `State(hr::AppState)` 拿 `config`/`pg`/`redis`/`nacos`。连接参数写配置中心 `[pg]`/`[redis]` 段（整段可省略 = 全默认）；业务自定义配置用 `state.config.extra::<T>()` 解析，不要另开配置文件。
 
 ## 日志
 
@@ -443,4 +486,4 @@ fn main() {
 cargo test
 ```
 
-17 个集成测试：0.1 的 9 个信封测试（成功/失败精确形状、`data` 省略、`HrResult` 两条路径、anyhow / StatusCode / &str 转换、分页形状），加上 `merge_all` 合并路由、二进制名缺省、`NACOS_SERVER_ADDR` 缺失报错、`Config` 默认值与 `extra` 解析、缺必填字段报错、坏 TOML 报 500、sqlx / redis / nacos / toml 错误转换。`cargo check --no-default-features` 验证纯信封模式可编译。
+21 个集成测试：0.1 的 9 个信封测试（成功/失败精确形状、`data` 省略、`HrResult` 两条路径、anyhow / StatusCode / &str 转换、分页形状），加上 `merge_all` 合并路由、二进制名缺省、`NACOS_SERVER_ADDR` 缺失报错、`Config` 默认值与 `extra` 解析（含 `[pg]`/`[redis]` 配置段覆盖、旧平铺键落 `extra`）、缺必填字段报错、坏 TOML 报 500、sqlx / redis / nacos / toml / migrate 错误转换、`migrate!` 宏内嵌校验。`cargo check --no-default-features` 验证纯信封模式可编译。

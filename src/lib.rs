@@ -188,6 +188,12 @@ impl From<sqlx::Error> for HrError {
         Self::msg(e.to_string())
     }
 }
+#[cfg(feature = "pg")]
+impl From<sqlx::migrate::MigrateError> for HrError {
+    fn from(e: sqlx::migrate::MigrateError) -> Self {
+        Self::msg(e.to_string())
+    }
+}
 
 #[cfg(feature = "redis")]
 impl From<deadpool_redis::redis::RedisError> for HrError {

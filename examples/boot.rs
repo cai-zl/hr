@@ -11,9 +11,9 @@
 //!
 //! 业务模块的固定写法：零参函数返回 `Router<AppState>`，main 一行启动。
 
+use axum::Router;
 use axum::extract::{Path, State};
 use axum::routing::get;
-use axum::Router;
 use hr::pg::sqlx;
 use hr::{AppState, Hr, HrError, HrResult};
 use serde_json::json;
@@ -23,11 +23,12 @@ fn user_routes() -> Router<AppState> {
 }
 
 async fn get_user(State(st): State<AppState>, Path(id): Path<i64>) -> HrResult<serde_json::Value> {
-    let name: Option<(String,)> = sqlx::query_as::<_, (String,)>("select name from t_user where id = $1")
-        .bind(id)
-        .fetch_optional(&st.pg)
-        .await
-        .map_err(HrError::from)?;
+    let name: Option<(String,)> =
+        sqlx::query_as::<_, (String,)>("select name from t_user where id = $1")
+            .bind(id)
+            .fetch_optional(&st.pg)
+            .await
+            .map_err(HrError::from)?;
     match name {
         Some((name,)) => Ok(Hr::ok(json!({ "id": id, "name": name }))),
         None => Err(HrError::new(1001, "user not found")),
@@ -51,5 +52,5 @@ async fn health(State(st): State<AppState>) -> HrResult<serde_json::Value> {
 #[tokio::main]
 async fn main() -> Result<(), HrError> {
     tracing_subscriber::fmt::init();
-    hr::boot::run_env([user_routes(), health_routes()]).await
+    hr::boot::run_env(Some(sqlx::migrate!("./migrations")), [user_routes(), health_routes()]).await
 }
