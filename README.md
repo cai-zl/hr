@@ -18,16 +18,13 @@
 
 - 响应 JSON 键统一驼峰（camelCase）；当前唯一多词键是分页的 `pageSize`
 
-## 0.2 模块（feature 默认全开）
+## 0.7 模块（两态：boot 全家桶 / 纯信封）
 
 | feature | 内容 | 依赖 |
 |---|---|---|
-| `pg` | PostgreSQL 连接池 | sqlx 0.9 |
-| `redis` | Redis 连接池 | deadpool-redis 0.23 |
-| `nacos` | Nacos 配置中心 + 服务注册 | nacos-sdk 0.3 |
-| `boot` | 一键启动：配置 → 连接 → 注册 → 服务 → 停机反注册 | 前三者 + toml + tokio + tracing |
+| `boot`（默认） | 响应信封 + 一键启动：配置 → 连接 → 迁移 → 注册 → 服务 → 停机反注册 | sqlx 0.9 / deadpool-redis 0.23 / nacos-sdk 0.3 / toml / tokio / tracing |
 
-只要响应信封？关掉默认 feature：`default-features = false`。
+pg/redis/nacos 不再单独开 feature，连接函数也不公开：**连库只有 `hr::boot::serve` 启动时做一次**，业务代码只写 `[pg]`/`[redis]` 配置段、从 `AppState` 取连接池。只要响应信封？关掉默认 feature：`default-features = false`。
 ## 安装
 
 ```toml
@@ -45,7 +42,7 @@ hr = { git = "ssh://git@github.com/cai-zl/hr.git" }
 | `HrPage<T>` / `HrPage::new` | 分页数据结构 |
 | `From<...> for HrError` | `StatusCode` / `anyhow::Error` / `String` / `&str` 自动转换（基础设施错误统一 `internal error`，原文进日志） |
 | `hr::merge_all([...])` | 合并各业务模块路由，附 404 信封 fallback |
-| `pg::connect_with` / `redis::connect_with` / `sqlx::migrate!` | 数据库 / Redis 连接（`[pg]`/`[redis]` 配置段）/ 编译期迁移 |
+| `pg::PgConfig` / `redis::RedisConfig` / `sqlx::migrate!` | `[pg]`/`[redis]` 配置段（连接由 boot 启动时执行）/ 编译期迁移 |
 | `nacos::Nacos` | 配置中心读取 + 服务注册/注销 |
 | `boot::serve` / `boot::serve_with` + `with_migrator` / `with_hook` | 一键启动整套服务，链式挂迁移与启动钩子（见下文） |
 | `AppState`（boot） | 全家桶状态：config / pg / redis / nacos |
@@ -242,19 +239,16 @@ pub struct PgConfig {     // TOML [pg] 段，全默认可整段省略
     pub acquire_timeout_secs: u64, // 默认 5
 }
 
-pub async fn connect(url: &str) -> Result<sqlx::PgPool, sqlx::Error>;              // 默认配置
-pub async fn connect_with(url: &str, cfg: &PgConfig) -> Result<sqlx::PgPool, sqlx::Error>;
+// 连接函数为 crate 内部，boot 启动时调用；业务代码从 AppState 拿池
 ```
 
 ```rust
-let pool = hr::pg::connect("postgres://user:pass@127.0.0.1:5432/mydb").await?;
-
-let name: Option<(String,)> = sqlx::query_as::<_, (String,)>("select name from t_user where id = $1")
-    .bind(1)
-    .fetch_optional(&pool)
-    .await
-    .map_err(hr::HrError::from)?;   // sqlx::Error → {"code":500,...}
-```
+async fn user(State(st): State<hr::AppState>) -> hr::HrResult<User> {
+    let name: Option<(String,)> = sqlx::query_as::<_, (String,)>("select name from t_user where id = $1")
+        .bind(1)
+        .fetch_optional(&st.pg)          // 连接池在 AppState 里
+        .await
+        .map_err(hr::HrError::from)?;   // sqlx::Error → {"code":500,"message":"internal error"}
 
 
 ### 数据库迁移（编译期内嵌，部署零目录）
@@ -279,16 +273,11 @@ pub struct RedisConfig {      // TOML [redis] 段，全默认可整段省略
     pub wait_timeout_secs: Option<u64>, // 默认 None（库默认，不设等待超时）
 }
 
-pub fn connect(url: &str, max_size: usize)   // 简写：只设池大小
-    -> Result<deadpool_redis::Pool, deadpool_redis::CreatePoolError>;
-pub fn connect_with(url: &str, cfg: &RedisConfig)
-    -> Result<deadpool_redis::Pool, deadpool_redis::CreatePoolError>;
+// 连接函数为 crate 内部，boot 启动时调用；业务代码从 AppState 拿池
 ```
 
 ```rust
-let pool = hr::redis::connect("redis://127.0.0.1:6379", 10)?;
-
-let mut conn = pool.get().await.map_err(hr::HrError::from)?;
+let mut conn = st.redis.get().await.map_err(hr::HrError::from)?;
 let pong: String = deadpool_redis::redis::cmd("PING")
     .query_async(&mut *conn)
     .await
@@ -486,7 +475,7 @@ curl localhost:3000/user/1   # 查 PostgreSQL
 
 > 本项目所有 HTTP handler 必须使用 `hr` 库返回响应：成功返回 `Ok(Hr::ok(data))`（或 `Hr::page(list, total, page, page_size)` 分页），失败返回 `Err(...)`，handler 签名用 `HrResult<T>` 或 `Hr<T>`。不要手写 JSON 响应结构，不要改 HTTP 状态码。
 
-> 服务接入：`main` 里用 `hr::boot::serve([模块::routes(), ...]).with_migrator(sqlx::migrate!("./migrations")).await` 启动（不用迁移就不调 `with_migrator`）；启动钩子是收 `hr::AppState` 的普通异步函数，`with_hook` 逐个追加，返回 Err 则不启动；基础设施错误（数据库/Redis/Nacos/TOML）经 `?` 转换后响应体固定为 `{"code":500,"message":"internal error"}`（原文在服务日志），不要把内部错误细节拼进响应；每个业务模块暴露零参的 `routes() -> axum::Router<hr::AppState>`，handler 通过 `State(hr::AppState)` 拿 `config`/`pg`/`redis`/`nacos`。连接参数写配置中心 `[pg]`/`[redis]` 段（整段可省略 = 全默认）；业务自定义配置用 `state.config.extra::<T>()` 解析，不要另开配置文件。
+> 服务接入：`main` 里用 `hr::boot::serve([模块::routes(), ...]).with_migrator(sqlx::migrate!("./migrations")).await` 启动（不用迁移就不调 `with_migrator`）；启动钩子是收 `hr::AppState` 的普通异步函数，`with_hook` 逐个追加，返回 Err 则不启动；基础设施错误（数据库/Redis/Nacos/TOML）经 `?` 转换后响应体固定为 `{"code":500,"message":"internal error"}`（原文在服务日志），不要把内部错误细节拼进响应；每个业务模块暴露零参的 `routes() -> axum::Router<hr::AppState>`，handler 通过 `State(hr::AppState)` 拿 `config`/`pg`/`redis`/`nacos`。连接参数写配置中心 `[pg]`/`[redis]` 段（整段可省略 = 全默认）；连接由 `hr::boot` 启动时完成，业务代码不自行连库（连接函数不公开），池从 `AppState.pg`/`AppState.redis` 取；业务自定义配置用 `state.config.extra::<T>()` 解析，不要另开配置文件。
 
 ## 日志
 

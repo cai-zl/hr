@@ -1,6 +1,6 @@
 [package]
 name = "hr"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "MIT"
 description = "Unified HTTP response envelope (code/message/data) for axum services"
@@ -28,11 +28,8 @@ nacos-sdk = "0.3.3"
 tracing-subscriber = "0.3"
 
 [features]
-default = ["pg", "redis", "nacos", "boot"]
-pg = ["dep:sqlx"]
-redis = ["dep:deadpool-redis"]
-nacos = ["dep:nacos-sdk", "dep:toml"]
-boot = ["dep:tokio", "dep:toml", "pg", "redis", "nacos"]
+default = ["boot"]
+boot = ["dep:sqlx", "dep:deadpool-redis", "dep:nacos-sdk", "dep:toml", "dep:tokio"]
 
 [[example]]
 name = "boot"

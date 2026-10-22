@@ -1,7 +1,7 @@
-//! Redis 连接池（feature = "redis"），基于 deadpool-redis。
+//! Redis 连接池（属于 boot 全家桶），基于 deadpool-redis。
 //!
-//! 配置归本模块所有：[`RedisConfig`] 定义全部池参数与默认值，
-//! boot 等上层只负责把它从 TOML 传进来，不感知连接细节。
+//! [`RedisConfig`] 定义 `[redis]` 配置段的全部键与默认值；连接动作由
+//! `hr::boot::serve` 在启动时执行，业务代码不直接调用（函数为 crate 内部）。
 
 pub use deadpool_redis;
 
@@ -28,22 +28,8 @@ impl Default for RedisConfig {
     }
 }
 
-/// 连接 Redis，只指定池大小（等待超时用库默认）。
-pub fn connect(
-    url: &str,
-    max_size: usize,
-) -> Result<deadpool_redis::Pool, deadpool_redis::CreatePoolError> {
-    connect_with(
-        url,
-        &RedisConfig {
-            pool_size: max_size,
-            ..Default::default()
-        },
-    )
-}
-
-/// 连接 Redis，使用给定配置。
-pub fn connect_with(
+/// 连接 Redis，使用给定配置（crate 内部，由 boot 调用）。
+pub(crate) fn connect_with(
     url: &str,
     cfg: &RedisConfig,
 ) -> Result<deadpool_redis::Pool, deadpool_redis::CreatePoolError> {

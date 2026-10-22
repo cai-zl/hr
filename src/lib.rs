@@ -32,11 +32,11 @@ use tracing::warn;
 
 #[cfg(feature = "boot")]
 pub mod boot;
-#[cfg(feature = "nacos")]
+#[cfg(feature = "boot")]
 pub mod nacos;
-#[cfg(feature = "pg")]
+#[cfg(feature = "boot")]
 pub mod pg;
-#[cfg(feature = "redis")]
+#[cfg(feature = "boot")]
 pub mod redis;
 
 #[cfg(feature = "boot")]
@@ -187,14 +187,14 @@ impl From<&str> for HrError {
     }
 }
 
-#[cfg(feature = "pg")]
+#[cfg(feature = "boot")]
 impl From<sqlx::Error> for HrError {
     fn from(e: sqlx::Error) -> Self {
         warn!(error = ?e, "infrastructure error mapped to 500");
         Self::msg("internal error")
     }
 }
-#[cfg(feature = "pg")]
+#[cfg(feature = "boot")]
 impl From<sqlx::migrate::MigrateError> for HrError {
     fn from(e: sqlx::migrate::MigrateError) -> Self {
         warn!(error = ?e, "infrastructure error mapped to 500");
@@ -202,7 +202,7 @@ impl From<sqlx::migrate::MigrateError> for HrError {
     }
 }
 
-#[cfg(feature = "redis")]
+#[cfg(feature = "boot")]
 impl From<deadpool_redis::redis::RedisError> for HrError {
     fn from(e: deadpool_redis::redis::RedisError) -> Self {
         warn!(error = ?e, "infrastructure error mapped to 500");
@@ -210,7 +210,7 @@ impl From<deadpool_redis::redis::RedisError> for HrError {
     }
 }
 
-#[cfg(feature = "redis")]
+#[cfg(feature = "boot")]
 impl From<deadpool_redis::PoolError> for HrError {
     fn from(e: deadpool_redis::PoolError) -> Self {
         warn!(error = ?e, "infrastructure error mapped to 500");
@@ -218,7 +218,7 @@ impl From<deadpool_redis::PoolError> for HrError {
     }
 }
 
-#[cfg(feature = "redis")]
+#[cfg(feature = "boot")]
 impl From<deadpool_redis::CreatePoolError> for HrError {
     fn from(e: deadpool_redis::CreatePoolError) -> Self {
         warn!(error = ?e, "infrastructure error mapped to 500");
@@ -226,7 +226,7 @@ impl From<deadpool_redis::CreatePoolError> for HrError {
     }
 }
 
-#[cfg(feature = "nacos")]
+#[cfg(feature = "boot")]
 impl From<nacos_sdk::api::error::Error> for HrError {
     fn from(e: nacos_sdk::api::error::Error) -> Self {
         warn!(error = ?e, "infrastructure error mapped to 500");
@@ -234,7 +234,7 @@ impl From<nacos_sdk::api::error::Error> for HrError {
     }
 }
 
-#[cfg(feature = "nacos")]
+#[cfg(feature = "boot")]
 impl From<toml::de::Error> for HrError {
     fn from(e: toml::de::Error) -> Self {
         warn!(error = ?e, "infrastructure error mapped to 500");

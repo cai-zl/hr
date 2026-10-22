@@ -1,8 +1,7 @@
-//! PostgreSQL 连接池（feature = "pg"）。
+//! PostgreSQL 连接池（属于 boot 全家桶）。
 //!
-//! 配置归本模块所有：[`PgConfig`] 定义全部连接参数与默认值，
-//! boot 等上层只负责把它从 TOML 传进来，不感知连接细节。
-
+//! [`PgConfig`] 定义 `[pg]` 配置段的全部键与默认值；连接动作由
+//! `hr::boot::serve` 在启动时执行，业务代码不直接调用（函数为 crate 内部）。
 pub use sqlx;
 pub use sqlx::migrate;
 
@@ -30,13 +29,8 @@ impl Default for PgConfig {
     }
 }
 
-/// 连接 PostgreSQL，使用默认配置（max_connections = 10，acquire 超时 5s）。
-pub async fn connect(url: &str) -> Result<sqlx::PgPool, sqlx::Error> {
-    connect_with(url, &PgConfig::default()).await
-}
-
-/// 连接 PostgreSQL，使用给定配置。
-pub async fn connect_with(url: &str, cfg: &PgConfig) -> Result<sqlx::PgPool, sqlx::Error> {
+/// 连接 PostgreSQL，使用给定配置（crate 内部，由 boot 调用）。
+pub(crate) async fn connect_with(url: &str, cfg: &PgConfig) -> Result<sqlx::PgPool, sqlx::Error> {
     let pool = PgPoolOptions::new()
         .max_connections(cfg.max_connections)
         .acquire_timeout(Duration::from_secs(cfg.acquire_timeout_secs))
